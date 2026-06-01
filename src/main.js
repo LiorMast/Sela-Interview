@@ -237,6 +237,8 @@ function initApp() {
   if (!ENABLE_MULTIPLAYER) {
     const roomSetup = document.getElementById('room-setup-container');
     if (roomSetup) roomSetup.style.display = 'none';
+    const customLobby = document.getElementById('custom-lobby-settings');
+    if (customLobby) customLobby.style.display = 'none';
     const lobbyRoomInfo = document.getElementById('lobby-room-info');
     if (lobbyRoomInfo) lobbyRoomInfo.style.display = 'none';
   } else {
