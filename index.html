@@ -27,24 +27,52 @@
 
   <!-- Screen 1: Welcome/Lobby Screen -->
   <div id="welcome-screen" class="screen-container">
-    <main class="glass-panel lobby-card">
-      <div class="logo-container">
-        <h1 class="logo-text">FACEMOJI.IO</h1>
-        <p class="logo-subtext">AI Avatar Arena</p>
-      </div>
+    <div class="lobby-wrapper">
+      <main class="glass-panel lobby-card">
+        <div class="logo-container">
+          <h1 class="logo-text">FACEMOJI.IO</h1>
+          <p class="logo-subtext">AI Avatar Arena</p>
+        </div>
 
-      <div class="input-group">
-        <label for="player-name" class="input-label">Choose Nickname</label>
-        <input type="text" id="player-name" class="text-input" placeholder="Enter blob name..." maxlength="14" autocomplete="off">
-      </div>
+        <div class="input-group">
+          <label for="player-name" class="input-label">Choose Nickname</label>
+          <input type="text" id="player-name" class="text-input" placeholder="Enter blob name..." maxlength="14" autocomplete="off">
+        </div>
 
-      <button id="start-capture-btn" class="btn-primary">
-        <span>Create AI Avatar</span>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v12h14V6H5zm7 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/>
-        </svg>
-      </button>
-    </main>
+        <!-- Cached Avatar Preview (Hidden by default unless cache exists) -->
+        <div id="cached-avatar-container" class="input-group hidden" style="align-items: center; margin-bottom: 20px;">
+          <label class="input-label">Last Saved Avatar</label>
+          <div style="display: flex; align-items: center; gap: 14px; margin-top: 6px; width: 100%; background: rgba(10, 15, 30, 0.5); padding: 10px 14px; border-radius: 14px; border: 1px solid rgba(0, 242, 254, 0.15);">
+            <img id="cached-avatar-preview" src="" style="width: 48px; height: 48px; border-radius: 50%; border: 1.5px solid var(--neon-cyan); box-shadow: 0 0 10px rgba(0,242,254,0.3); object-fit: cover;" alt="Cached Avatar">
+            <button id="play-cached-btn" class="btn-primary" style="padding: 10px 18px; font-size: 0.9rem; flex: 1; margin-top: 0; box-shadow: none;">
+              Play with Last Avatar
+            </button>
+          </div>
+        </div>
+
+        <button id="start-capture-btn" class="btn-primary">
+          <span>Create AI Avatar</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v12h14V6H5zm7 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/>
+          </svg>
+        </button>
+      </main>
+
+      <!-- Persistent All-Time Champions Leaderboard Card (Real Players Only) -->
+      <aside class="glass-panel lobby-leaderboard-card">
+        <div class="leaderboard-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+          </svg>
+          <span>ALL-TIME CHAMPIONS</span>
+        </div>
+        <p class="lobby-leaderboard-desc">Top real players ranked by highest size</p>
+        
+        <ol id="lobby-leaderboard-list" class="lobby-leaderboard-list">
+          <li class="lobby-leaderboard-empty">No records yet. Be the first!</li>
+        </ol>
+      </aside>
+    </div>
   </div>
 
   <!-- Screen 2: Camera Access & Capture Screen -->
@@ -102,6 +130,10 @@
         <!-- Lines injected via JS -->
       </div>
 
+      <button id="scanner-skip-ai-btn" class="btn-secondary" style="margin-top: 14px; width: 100%; font-size: 0.85rem; border-color: rgba(255,0,127,0.35);">
+        Use Default Avatar & Enter Arena Now
+      </button>
+
       <button id="scanner-next-btn" class="btn-primary hidden" style="margin-top: 20px; width: 100%;">
         <span>Enter Grid Arena</span>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -119,18 +151,7 @@
         <button id="settings-close-btn" class="close-btn" aria-label="Close">&times;</button>
       </div>
 
-      <div class="toggle-container">
-        <div class="toggle-label-group">
-          <span class="toggle-main-label">Use Google Gemini API</span>
-          <span class="toggle-sub-label">Imagen 3 AI emoji generation</span>
-        </div>
-        <label class="switch">
-          <input type="checkbox" id="api-toggle-checkbox">
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div id="api-key-container" class="input-group" style="transition: all 0.3s ease; opacity: 0.4; pointer-events: none;">
+      <div id="api-key-container" class="input-group">
         <label for="gemini-api-key" class="input-label">Gemini API Key</label>
         <input type="password" id="gemini-api-key" class="text-input" placeholder="AI Studio Key (AIStudio API)...">
         <span class="toggle-sub-label" style="margin-top: 6px; font-size: 0.72rem;">
@@ -217,6 +238,17 @@
           <span class="gameover-stat-label">Bots Consumed</span>
           <span id="gameover-stat-eaten" class="gameover-stat-value">0</span>
         </div>
+      </div>
+
+      <!-- Final Arena Standings Leaderboard -->
+      <div class="gameover-leaderboard-container">
+        <h3 class="gameover-leaderboard-title">
+          <span>FINAL STANDINGS</span>
+          <span id="gameover-rank-badge">Rank --</span>
+        </h3>
+        <ol id="gameover-leaderboard-list" class="gameover-leaderboard-list">
+          <!-- Populated dynamically -->
+        </ol>
       </div>
 
       <button id="gameover-retry-btn" class="btn-primary">

@@ -12,7 +12,8 @@ const appState = {
   stats: {
     maxMass: 0,
     botsEaten: 0
-  }
+  },
+  hasEnteredArena: false
 };
 
 // UI Elements
@@ -34,10 +35,11 @@ const DOM = {
   cameraSkipBtn: document.getElementById('camera-skip-btn'),
   scannerNextBtn: document.getElementById('scanner-next-btn'),
   gameoverRetryBtn: document.getElementById('gameover-retry-btn'),
+  playCachedBtn: document.getElementById('play-cached-btn'),
+  scannerSkipAiBtn: document.getElementById('scanner-skip-ai-btn'),
   
   // Input fields
   playerNameInput: document.getElementById('player-name'),
-  apiToggleCheckbox: document.getElementById('api-toggle-checkbox'),
   apiKeyInput: document.getElementById('gemini-api-key'),
   apiKeyContainer: document.getElementById('api-key-container'),
   
@@ -47,6 +49,8 @@ const DOM = {
   scannerConsole: document.getElementById('scanner-console'),
   aiPipelineName: document.getElementById('ai-pipeline-name'),
   notification: document.getElementById('notification'),
+  cachedAvatarContainer: document.getElementById('cached-avatar-container'),
+  cachedAvatarPreview: document.getElementById('cached-avatar-preview'),
   
   // Stats HUD
   statMass: document.getElementById('stat-mass'),
@@ -105,43 +109,29 @@ function showToast(message, isWarning = false) {
 // Load configurations from Local Storage
 function loadSettings() {
   const savedName = localStorage.getItem('facemoji_playerName');
-  const savedUseApi = localStorage.getItem('facemoji_useApi') === 'true';
   const savedApiKey = localStorage.getItem('facemoji_apiKey') || '';
+  const envKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 
   if (savedName) DOM.playerNameInput.value = savedName;
-  DOM.apiToggleCheckbox.checked = savedUseApi;
   DOM.apiKeyInput.value = savedApiKey;
 
-  appState.useApi = savedUseApi;
-  appState.apiKey = savedApiKey;
-
-  updateApiKeyVisibility();
+  appState.apiKey = savedApiKey || envKey;
+  appState.useApi = !!appState.apiKey;
 }
 
 function saveSettings() {
   const name = DOM.playerNameInput.value.trim();
-  const useApi = DOM.apiToggleCheckbox.checked;
   const apiKey = DOM.apiKeyInput.value.trim();
+  const envKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 
   localStorage.setItem('facemoji_playerName', name);
-  localStorage.setItem('facemoji_useApi', useApi);
   localStorage.setItem('facemoji_apiKey', apiKey);
 
-  appState.useApi = useApi;
-  appState.apiKey = apiKey;
+  appState.playerName = name;
+  appState.apiKey = apiKey || envKey;
+  appState.useApi = !!appState.apiKey;
 
   showToast('Settings Saved Successfully!');
-}
-
-function updateApiKeyVisibility() {
-  const active = DOM.apiToggleCheckbox.checked;
-  if (active) {
-    DOM.apiKeyContainer.style.opacity = '1';
-    DOM.apiKeyContainer.style.pointerEvents = 'all';
-  } else {
-    DOM.apiKeyContainer.style.opacity = '0.4';
-    DOM.apiKeyContainer.style.pointerEvents = 'none';
-  }
 }
 
 // Scanner Console Visual Logs
@@ -162,6 +152,7 @@ function writeConsole(text, isError = false) {
 // Binds Setup
 function initApp() {
   loadSettings();
+  checkAndDisplayCachedAvatar();
   
   // Instantiate core engine
   game = new GameEngine(
@@ -179,8 +170,6 @@ function initApp() {
     DOM.settingsModal.classList.remove('active');
   });
 
-  DOM.apiToggleCheckbox.addEventListener('change', updateApiKeyVisibility);
-
   DOM.settingsSaveBtn.addEventListener('click', () => {
     saveSettings();
     DOM.settingsModal.classList.remove('active');
@@ -190,6 +179,7 @@ function initApp() {
   DOM.startCaptureBtn.addEventListener('click', async () => {
     appState.playerName = DOM.playerNameInput.value.trim() || 'Blobby';
     localStorage.setItem('facemoji_playerName', appState.playerName);
+    appState.hasEnteredArena = false; // Reset arena entry state
     
     DOM.settingsBtn.classList.add('hidden'); // Hide settings gear in-game
     
@@ -199,8 +189,8 @@ function initApp() {
     writeConsole('Initializing Camera Access hardware...');
     const cameraStarted = await camera.start();
     if (!cameraStarted) {
-      showToast('Camera blocked or not found. Falling back to default blob.', true);
-      handleCameraFailure();
+      showToast('Camera blocked or not found. Entering arena with default blob.', true);
+      launchWithDefaultBlob();
     }
   });
 
@@ -212,9 +202,7 @@ function initApp() {
   });
 
   DOM.cameraSkipBtn.addEventListener('click', () => {
-    camera.stop();
-    appState.capturedPhoto = null;
-    startAvatarAIPipeline();
+    launchWithDefaultBlob();
   });
 
   DOM.cameraCaptureBtn.addEventListener('click', () => {
@@ -226,13 +214,31 @@ function initApp() {
       DOM.capturedPhotoPreview.src = photo;
       startAvatarAIPipeline();
     } else {
-      showToast('Capture failed. Using default template.', true);
+      showToast('Capture failed. Entering arena with default blob.', true);
       handleCameraFailure();
     }
   });
 
   // Scanner Stage: Enter Arena
   DOM.scannerNextBtn.addEventListener('click', () => {
+    appState.hasEnteredArena = true;
+    showScreen(DOM.gameHud);
+    game.start(appState.playerName, appState.avatarUrl);
+  });
+
+  // Skip AI generation during pipeline scan
+  DOM.scannerSkipAiBtn.addEventListener('click', () => {
+    launchWithDefaultBlob();
+  });
+
+  // Play with cached avatar
+  DOM.playCachedBtn.addEventListener('click', () => {
+    appState.playerName = DOM.playerNameInput.value.trim() || 'Blobby';
+    localStorage.setItem('facemoji_playerName', appState.playerName);
+    appState.avatarUrl = localStorage.getItem('facemoji_cachedAvatar');
+    appState.hasEnteredArena = true;
+    
+    DOM.settingsBtn.classList.add('hidden');
     showScreen(DOM.gameHud);
     game.start(appState.playerName, appState.avatarUrl);
   });
@@ -240,23 +246,54 @@ function initApp() {
   // Game over retry
   DOM.gameoverRetryBtn.addEventListener('click', () => {
     DOM.settingsBtn.classList.remove('hidden');
+    appState.hasEnteredArena = false; // Reset
     showScreen(DOM.welcomeScreen);
+    checkAndDisplayCachedAvatar(); // Check if newly generated cached avatar is available!
+    renderLobbyLeaderboard(); // Update lobby highscores board!
   });
+
+  // Dynamically update rank highlights when player edits their name
+  DOM.playerNameInput.addEventListener('input', () => {
+    renderLobbyLeaderboard();
+  });
+
+  // Initial render of all-time champions
+  renderLobbyLeaderboard();
+}
+
+function checkAndDisplayCachedAvatar() {
+  const cachedAvatar = localStorage.getItem('facemoji_cachedAvatar');
+  if (cachedAvatar) {
+    DOM.cachedAvatarPreview.src = cachedAvatar;
+    DOM.cachedAvatarContainer.classList.remove('hidden');
+  } else {
+    DOM.cachedAvatarContainer.classList.add('hidden');
+  }
+}
+
+function launchWithDefaultBlob() {
+  if (appState.hasEnteredArena) return; // Prevent double trigger
+  appState.hasEnteredArena = true;
+  camera.stop();
+  appState.avatarUrl = appState.capturedPhoto || AvatarGenerator.generateProcedural(null);
+  showScreen(DOM.gameHud);
+  game.start(appState.playerName, appState.avatarUrl);
 }
 
 function handleCameraFailure() {
-  appState.capturedPhoto = null;
-  startAvatarAIPipeline();
+  launchWithDefaultBlob();
 }
 
 // AI Emoji Pipeline Simulation
 async function startAvatarAIPipeline() {
+  appState.hasEnteredArena = false;
+  
   showScreen(DOM.scannerScreen);
   clearConsole();
   DOM.scannerNextBtn.classList.add('hidden');
   DOM.scannerProgress.style.width = '0%';
   
-  DOM.aiPipelineName.textContent = appState.useApi ? 'Google Imagen 3 AI Creator' : 'Procedural Vector Stylizer';
+  DOM.aiPipelineName.textContent = appState.useApi ? 'Google Gemini Flash-Image' : 'Procedural Vector Stylizer';
   
   writeConsole('COLLECTING STREAM FRAME SNAPSHOT...');
   await sleep(400);
@@ -277,56 +314,79 @@ async function startAvatarAIPipeline() {
     }
   }, 120);
 
-  try {
+  // Background promise generation so it continues even if skipped!
+  const generateAvatarPromise = (async () => {
     if (appState.useApi) {
-      // Gemini Flash / Imagen 3 active API workflow
-      const avatarDataUrl = await AvatarGenerator.generateWithGemini(
-        appState.capturedPhoto || AvatarGenerator.generateProcedural(null), // Fallback image if skip camera
+      // Gemini Flash-Image multimodal single API request
+      return await AvatarGenerator.generateWithGemini(
+        appState.capturedPhoto || AvatarGenerator.generateProcedural(null),
         appState.apiKey,
-        (msg) => writeConsole(msg)
+        (msg) => {
+          if (!appState.hasEnteredArena) {
+            writeConsole(msg);
+          }
+        }
       );
-      appState.avatarUrl = avatarDataUrl;
     } else {
       // Procedural Vector Generation
-      writeConsole('COMPILING LOCAL STYLIZER ENGINE...');
-      await sleep(500);
-      writeConsole('RUNNING PIXEL MATRIX HISTOGRAM ANALYSIS...');
-      await sleep(600);
-      writeConsole('SAMPLING SKIN TONE FIELD COEFFICIENTS...');
-      await sleep(500);
-      writeConsole('INTERPOLATING HAIR & BACKGROUND LIGHT INDEX...');
-      await sleep(400);
-      
-      const avatarDataUrl = AvatarGenerator.generateProcedural(appState.capturedPhoto);
-      appState.avatarUrl = avatarDataUrl;
-      
-      writeConsole('SUCCESS: Vector Avatar compiled correctly.');
+      if (!appState.hasEnteredArena) writeConsole('COMPILING LOCAL STYLIZER ENGINE...');
       await sleep(300);
+      if (!appState.hasEnteredArena) writeConsole('RUNNING PIXEL MATRIX HISTOGRAM ANALYSIS...');
+      await sleep(400);
+      if (!appState.hasEnteredArena) writeConsole('SAMPLING SKIN TONE FIELD COEFFICIENTS...');
+      await sleep(300);
+      if (!appState.hasEnteredArena) writeConsole('INTERPOLATING HAIR & BACKGROUND LIGHT INDEX...');
+      await sleep(300);
+      
+      const res = AvatarGenerator.generateProcedural(appState.capturedPhoto);
+      if (!appState.hasEnteredArena) writeConsole('SUCCESS: Vector Avatar compiled correctly.');
+      await sleep(200);
+      return res;
     }
-    
-    // Complete visual progress bar
-    clearInterval(progressInterval);
-    DOM.scannerProgress.style.width = '100%';
-    await sleep(200);
+  })();
 
-    // Render generated avatar inside the scanner preview!
-    DOM.capturedPhotoPreview.src = appState.avatarUrl;
-    writeConsole('AVATAR TEXTURED CORRECTLY. READY TO ENTER GRID.');
+  generateAvatarPromise.then(async (avatarDataUrl) => {
+    // 1. ALWAYS CACHE SUCCESSFULLY GENERATED AVATARS (even if skipped!)
+    localStorage.setItem('facemoji_cachedAvatar', avatarDataUrl);
+    appState.avatarUrl = avatarDataUrl;
     
-    // Show Next Button
-    DOM.scannerNextBtn.classList.remove('hidden');
+    // 2. If the player HAS NOT entered the arena yet, complete visual and reveal the Next button!
+    if (!appState.hasEnteredArena) {
+      clearInterval(progressInterval);
+      DOM.scannerProgress.style.width = '100%';
+      await sleep(200);
+
+      DOM.capturedPhotoPreview.src = avatarDataUrl;
+      writeConsole('AVATAR TEXTURED CORRECTLY.');
+      writeConsole('READY: Click "Enter Grid Arena" below to play!');
+      
+      DOM.scannerNextBtn.classList.remove('hidden');
+    } else {
+      console.log('AI Avatar successfully generated and cached in background.');
+    }
+  }).catch(async (err) => {
+    console.error('Background Avatar Generation failed:', err);
     
-  } catch (err) {
-    clearInterval(progressInterval);
-    writeConsole(`CRITICAL PIPELINE ERROR: ${err.message}`, true);
-    writeConsole('COMPILING GENERAL PROCEDURAL FALLBACK...', true);
-    await sleep(1500);
-    
-    appState.avatarUrl = AvatarGenerator.generateProcedural(null);
-    DOM.scannerProgress.style.width = '100%';
-    DOM.capturedPhotoPreview.src = appState.avatarUrl;
-    DOM.scannerNextBtn.classList.remove('hidden');
-  }
+    if (!appState.hasEnteredArena) {
+      clearInterval(progressInterval);
+      writeConsole(`CRITICAL PIPELINE ERROR: ${err.message}`, true);
+      writeConsole('COMPILING GENERAL FALLBACK TO ORIGINAL PICTURE...', true);
+      await sleep(1000);
+      
+      const fallbackUrl = appState.capturedPhoto || AvatarGenerator.generateProcedural(null);
+      // Cache fallback avatar too
+      localStorage.setItem('facemoji_cachedAvatar', fallbackUrl);
+      appState.avatarUrl = fallbackUrl;
+      
+      DOM.scannerProgress.style.width = '100%';
+      DOM.capturedPhotoPreview.src = fallbackUrl;
+      
+      writeConsole('FALLBACK READY.');
+      writeConsole('READY: Click "Enter Grid Arena" below to play!');
+      
+      DOM.scannerNextBtn.classList.remove('hidden');
+    }
+  });
 }
 
 // Game Core Callbacks
@@ -338,7 +398,10 @@ function handleStatsUpdate(mass, eatenCount) {
   appState.stats.botsEaten = eatenCount;
 }
 
-function handleGameOver(finalMass) {
+function handleGameOver(finalMass, leaderboard, rank) {
+  // Save to persistent global leaderboard (real players differed by user name)
+  saveScoreToGlobalLeaderboard(appState.playerName, finalMass, appState.avatarUrl);
+
   // Update Game Over text
   DOM.gameoverStatMass.textContent = finalMass;
   DOM.gameoverStatEaten.textContent = appState.stats.botsEaten;
@@ -362,7 +425,144 @@ function handleGameOver(finalMass) {
     gctx.restore();
   };
 
+  // Update final rank badge
+  const rankBadge = document.getElementById('gameover-rank-badge');
+  if (rankBadge && rank && leaderboard) {
+    rankBadge.textContent = `Rank #${rank} / ${leaderboard.length}`;
+  }
+
+  // Populate standings list
+  const listEl = document.getElementById('gameover-leaderboard-list');
+  if (listEl && leaderboard) {
+    let listHtml = '';
+    
+    // We display top 5, and if the player is not in top 5, we append their ranking at the bottom!
+    const topLimit = 5;
+    const topCells = leaderboard.slice(0, topLimit);
+    const isPlayerInTop5 = topCells.some(cell => cell.isPlayer);
+    
+    topCells.forEach((cell, idx) => {
+      const rankNum = idx + 1;
+      const rankClass = rankNum <= 3 ? `gameover-rank-${rankNum}` : '';
+      const selfClass = cell.isPlayer ? 'self' : '';
+      
+      listHtml += `
+        <li class="gameover-leaderboard-item ${selfClass}">
+          <div class="gameover-rank ${rankClass}">#${rankNum}</div>
+          <div class="gameover-name">
+            <img class="gameover-avatar-mini" src="${cell.avatarUrl}" alt="${cell.name}">
+            <span>${cell.name}</span>
+          </div>
+          <div class="gameover-score">${Math.round(cell.mass)}</div>
+        </li>
+      `;
+    });
+    
+    if (!isPlayerInTop5) {
+      // Append separator ellipses
+      listHtml += `<div class="gameover-leaderboard-separator">•••</div>`;
+      
+      // Find player cell in the full leaderboard
+      const playerIndex = leaderboard.findIndex(cell => cell.isPlayer);
+      if (playerIndex !== -1) {
+        const pCell = leaderboard[playerIndex];
+        listHtml += `
+          <li class="gameover-leaderboard-item self">
+            <div class="gameover-rank">#${playerIndex + 1}</div>
+            <div class="gameover-name">
+              <img class="gameover-avatar-mini" src="${pCell.avatarUrl}" alt="${pCell.name}">
+              <span>${pCell.name}</span>
+            </div>
+            <div class="gameover-score">${Math.round(pCell.mass)}</div>
+          </li>
+        `;
+      }
+    }
+    
+    listEl.innerHTML = listHtml;
+  }
+
   showScreen(DOM.gameoverScreen);
+}
+
+function saveScoreToGlobalLeaderboard(playerName, finalMass, avatarUrl) {
+  const name = (playerName || 'Blobby').trim();
+  if (!name) return;
+  
+  let scores = [];
+  try {
+    const data = localStorage.getItem('facemoji_global_leaderboard');
+    if (data) scores = JSON.parse(data);
+  } catch (e) {
+    console.error('Failed to parse global leaderboard', e);
+  }
+  
+  // Find if this player already exists in the leaderboard (case-insensitive check)
+  const existingIndex = scores.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
+  
+  if (existingIndex !== -1) {
+    // If the new score is higher, update it (differ by user name to keep high score)
+    if (finalMass > scores[existingIndex].mass) {
+      scores[existingIndex].mass = finalMass;
+      scores[existingIndex].avatarUrl = avatarUrl;
+      scores[existingIndex].timestamp = Date.now();
+    }
+  } else {
+    // Add new player record
+    scores.push({
+      name: name,
+      mass: finalMass,
+      avatarUrl: avatarUrl,
+      timestamp: Date.now()
+    });
+  }
+  
+  // Sort descending by mass and keep top 8 champions
+  scores.sort((a, b) => b.mass - a.mass);
+  scores = scores.slice(0, 8);
+  
+  localStorage.setItem('facemoji_global_leaderboard', JSON.stringify(scores));
+}
+
+function renderLobbyLeaderboard() {
+  const listEl = document.getElementById('lobby-leaderboard-list');
+  if (!listEl) return;
+  
+  let scores = [];
+  try {
+    const data = localStorage.getItem('facemoji_global_leaderboard');
+    if (data) scores = JSON.parse(data);
+  } catch (e) {
+    console.error(e);
+  }
+  
+  if (scores.length === 0) {
+    listEl.innerHTML = `<li class="lobby-leaderboard-empty">No records yet. Be the first!</li>`;
+    return;
+  }
+  
+  // Highlight currently typed nickname dynamically if it matches
+  const currentTypedName = DOM.playerNameInput.value.trim().toLowerCase();
+  
+  let html = '';
+  scores.forEach((score, idx) => {
+    const rank = idx + 1;
+    const rankClass = rank <= 3 ? `lobby-rank-${rank}` : '';
+    const highlightClass = score.name.toLowerCase() === currentTypedName ? 'highlight' : '';
+    
+    html += `
+      <li class="lobby-leaderboard-item ${highlightClass}">
+        <div class="lobby-rank ${rankClass}">#${rank}</div>
+        <div class="lobby-name-cell">
+          <img class="lobby-avatar-mini" src="${score.avatarUrl || AvatarGenerator.generateProcedural(null)}" alt="${score.name}">
+          <span>${score.name}</span>
+        </div>
+        <div class="lobby-score">${Math.round(score.mass)}</div>
+      </li>
+    `;
+  });
+  
+  listEl.innerHTML = html;
 }
 
 function sleep(ms) {

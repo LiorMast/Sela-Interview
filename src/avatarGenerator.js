@@ -279,27 +279,35 @@ export class AvatarGenerator {
    */
   static async generateWithGemini(base64Photo, apiKey, onProgress) {
     if (!apiKey) {
-      onProgress('Error: No API key found. Falling back to Procedural Avatar...');
+      onProgress('ERROR: No API key configured. Check Settings modal in lobby!', true);
+      onProgress('Falling back to original picture...');
       await AvatarGenerator.sleep(1500);
-      return AvatarGenerator.generateProcedural(base64Photo);
+      return base64Photo || AvatarGenerator.generateProcedural(null);
     }
 
-    try {
+    const apiPipelinePromise = (async () => {
       // Strip base64 header if present
       const cleanBase64 = base64Photo.replace(/^data:image\/\w+;base64,/, '');
 
-      // Stage 1: Call Gemini 2.5 Flash to describe the face image
-      onProgress('Initializing Gemini Flash Face Analyzer...');
-      await AvatarGenerator.sleep(600);
-      onProgress('Sending selfie data to Google Nano Banana...');
+      const getTime = () => `[${new Date().toLocaleTimeString()}]`;
 
-      const flashUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-      const flashPayload = {
+      onProgress(`${getTime()} Initializing Google Gemini AI Studio Pipeline...`);
+      await AvatarGenerator.sleep(250);
+      onProgress(`${getTime()} Loading Model: "gemini-2.5-flash-image" (Nano Banana)`);
+      onProgress(`${getTime()} Output Modality Target: ["IMAGE"]`);
+      onProgress(`${getTime()} Image Payload Size: ~${Math.round(cleanBase64.length / 1024)} KB`);
+      await AvatarGenerator.sleep(350);
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${apiKey}`;
+      onProgress(`${getTime()} POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image...`);
+
+      const payload = {
         contents: [
           {
+            role: 'user',
             parts: [
               {
-                text: "Analyze this photo of a face. Generate a short, highly descriptive prompt (under 60 words) to create a cute, circular 3D emoji avatar matching this person's look for a game. Describe: skin tone, hair style/color, facial features, emotion/smile, and any accessories like glasses. The output MUST start with 'A cute circular 3D emoji of...' and be in cartoon / claymation style on a flat white background. Output ONLY the raw prompt text, no headers, no markdown, no quotes."
+                text: "Analyze this photo of a face and generate a cute, circular 3D emoji avatar matching this person's look for a game. The avatar must be a single circular cell, cartoon / claymation / vector style, with cute glowing features, isolated on a flat white background. Output only the image."
               },
               {
                 inlineData: {
@@ -309,83 +317,59 @@ export class AvatarGenerator {
               }
             ]
           }
-        ]
-      };
-
-      const flashResponse = await fetch(flashUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(flashPayload)
-      });
-
-      if (!flashResponse.ok) {
-        const errText = await flashResponse.text();
-        throw new Error(`Gemini Flash analysis failed: ${flashResponse.statusText} - ${errText}`);
-      }
-
-      const flashData = await flashResponse.json();
-      let generatedPrompt = '';
-      
-      if (flashData.candidates && flashData.candidates[0].content.parts[0].text) {
-        generatedPrompt = flashData.candidates[0].content.parts[0].text.trim();
-      } else {
-        throw new Error('Unexpected Gemini response structure.');
-      }
-
-      onProgress('Analyzing facial metrics... Complete!');
-      onProgress(`Extracted Prompt: "${generatedPrompt}"`);
-      await AvatarGenerator.sleep(800);
-
-      // Stage 2: Call Imagen 3 via Predict endpoint to generate the emoji
-      onProgress('Requesting Imagen 3 generator...');
-      await AvatarGenerator.sleep(600);
-      onProgress('Synthesizing high-res 3D Emoji Avatar...');
-
-      const imagenUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
-      const imagenPayload = {
-        instances: [
-          {
-            prompt: generatedPrompt
-          }
         ],
-        parameters: {
-          sampleCount: 1,
-          aspectRatio: "1:1"
+        generationConfig: {
+          responseModalities: ["IMAGE"]
         }
       };
 
-      const imagenResponse = await fetch(imagenUrl, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(imagenPayload)
+        body: JSON.stringify(payload)
       });
 
-      if (!imagenResponse.ok) {
-        const errText = await imagenResponse.text();
-        throw new Error(`Imagen 3 generation failed: ${imagenResponse.statusText} - ${errText}`);
+      if (!response.ok) {
+        let errorDetails = `HTTP ${response.status} ${response.statusText}`;
+        try {
+          const errorJson = await response.json();
+          if (errorJson.error && errorJson.error.message) {
+            errorDetails = `${response.status} ${errorJson.error.status}: ${errorJson.error.message}`;
+          }
+        } catch (e) {
+          // JSON parsing failed, use statusText fallback
+        }
+        throw new Error(errorDetails);
       }
 
-      const imagenData = await imagenResponse.json();
+      onProgress(`${getTime()} HTTP Status: 200 OK. Parsing multimodal payload...`);
+      const data = await response.json();
       
-      if (imagenData.predictions && imagenData.predictions[0] && imagenData.predictions[0].bytesBase64Encoded) {
-        const imageBytes = imagenData.predictions[0].bytesBase64Encoded;
-        onProgress('AI Avatar generation successfully completed!');
-        await AvatarGenerator.sleep(500);
-        return `data:image/jpeg;base64,${imageBytes}`;
+      if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0].inlineData) {
+        const inlineData = data.candidates[0].content.parts[0].inlineData;
+        const mimeType = inlineData.mimeType || 'image/jpeg';
+        const imageBytes = inlineData.data;
+        onProgress(`${getTime()} SUCCESS: AI Image extracted (${mimeType}).`);
+        await AvatarGenerator.sleep(300);
+        return `data:${mimeType};base64,${imageBytes}`;
       } else {
-        throw new Error('Unexpected Imagen response structure.');
+        if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0].text) {
+          throw new Error(`Model returned a text description instead of the image. Response: "${data.candidates[0].content.parts[0].text}"`);
+        }
+        throw new Error('Unexpected response format from Gemini Flash-Image.');
       }
+    })();
 
+    try {
+      return await apiPipelinePromise;
     } catch (error) {
       console.error('Gemini API Avatar Pipeline failed:', error);
-      onProgress(`API Pipeline Failed: ${error.message}`);
-      onProgress('Falling back to local high-fidelity Procedural Avatar...');
+      onProgress(`[ERROR] Pipeline Failed: ${error.message}`, true);
+      onProgress('Falling back to original picture...', false);
       await AvatarGenerator.sleep(2000);
-      return AvatarGenerator.generateProcedural(base64Photo);
+      return base64Photo || AvatarGenerator.generateProcedural(null);
     }
   }
 

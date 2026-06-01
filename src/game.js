@@ -48,17 +48,41 @@ class SoundEffects {
       osc.connect(gain);
       gain.connect(this.ctx.destination);
 
-      osc.type = 'triangle';
+      osc.type = 'sine';
       const now = this.ctx.currentTime;
-      // Low bassy crunch gulp
-      osc.frequency.setValueAtTime(350, now);
-      osc.frequency.exponentialRampToValueAtTime(60, now + 0.3);
+      // Deep swallow/gulp bubble sound
+      osc.frequency.setValueAtTime(150, now);
+      osc.frequency.exponentialRampToValueAtTime(50, now + 0.2);
 
-      gain.gain.setValueAtTime(0.2, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
 
       osc.start(now);
-      osc.stop(now + 0.3);
+      osc.stop(now + 0.2);
+    } catch (e) {
+      console.warn('Audio play failed', e);
+    }
+  }
+
+  static playPowerup() {
+    this.init();
+    if (!this.ctx) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+
+      osc.type = 'sawtooth';
+      const now = this.ctx.currentTime;
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(1200, now + 0.25);
+
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+
+      osc.start(now);
+      osc.stop(now + 0.25);
     } catch (e) {
       console.warn('Audio play failed', e);
     }
@@ -90,6 +114,7 @@ export class GameEngine {
     this.player = null;
     this.bots = [];
     this.food = [];
+    this.powerups = [];
     this.particles = [];
     this.keys = {};
 
@@ -146,7 +171,15 @@ export class GameEngine {
       avatarUrl: playerAvatarUrl,
       avatarImg: new Image(),
       jiggle: 0,
-      jiggleSpeed: 0
+      jiggleSpeed: 0,
+      effects: {
+        speedBoost: 0,
+        enlarged: 0,
+        enlargeMultiplier: 1
+      },
+      floatingText: '',
+      floatingTextTimer: 0,
+      floatingTextColor: '#ffffff'
     };
     this.player.avatarImg.src = playerAvatarUrl;
 
@@ -154,6 +187,12 @@ export class GameEngine {
     this.food = [];
     for (let i = 0; i < this.FOOD_COUNT; i++) {
       this.spawnFoodItem();
+    }
+
+    // Initialize Powerups
+    this.powerups = [];
+    for (let i = 0; i < 15; i++) {
+      this.spawnPowerup();
     }
 
     // Initialize Bots
@@ -231,7 +270,15 @@ export class GameEngine {
       jiggleSpeed: 0,
       targetX: Math.random() * this.MAP_SIZE,
       targetY: Math.random() * this.MAP_SIZE,
-      aiTimer: 0
+      aiTimer: 0,
+      effects: {
+        speedBoost: 0,
+        enlarged: 0,
+        enlargeMultiplier: 1
+      },
+      floatingText: '',
+      floatingTextTimer: 0,
+      floatingTextColor: '#ffffff'
     });
   }
 
@@ -295,13 +342,24 @@ export class GameEngine {
   }
 
   // Calculate rendering radius from mass (standard circle area mapping)
-  getRadius(mass) {
-    return Math.sqrt(mass) * 10;
+  getRadius(massOrCell) {
+    if (typeof massOrCell === 'object' && massOrCell !== null) {
+      const mult = massOrCell.effects?.enlargeMultiplier || 1;
+      return Math.sqrt(massOrCell.mass * mult) * 10;
+    }
+    return Math.sqrt(massOrCell) * 10;
   }
 
   // Calculate speed limit from mass (larger = slower)
-  getMaxSpeed(mass) {
-    return this.SPEED_FACTOR * Math.pow(this.INITIAL_MASS / mass, 0.22);
+  getMaxSpeed(massOrCell) {
+    if (typeof massOrCell === 'object' && massOrCell !== null) {
+      let speed = this.SPEED_FACTOR * Math.pow(this.INITIAL_MASS / massOrCell.mass, 0.22);
+      if (massOrCell.effects?.speedBoost > 0) {
+        speed *= 1.8;
+      }
+      return speed;
+    }
+    return this.SPEED_FACTOR * Math.pow(this.INITIAL_MASS / massOrCell, 0.22);
   }
 
   spawnEatParticles(x, y, color, count = 12) {
@@ -321,33 +379,208 @@ export class GameEngine {
     }
   }
 
+  spawnPowerup() {
+    const types = ['SPEED', 'DASH', 'ENLARGE'];
+    const colors = {
+      'SPEED': '#00f2fe',
+      'DASH': '#ffd700',
+      'ENLARGE': '#ff007f'
+    };
+    const type = types[Math.floor(Math.random() * types.length)];
+    this.powerups.push({
+      x: Math.random() * this.MAP_SIZE,
+      y: Math.random() * this.MAP_SIZE,
+      radius: 16,
+      type: type,
+      color: colors[type],
+      pulse: Math.random() * Math.PI
+    });
+  }
+
+  applyPowerupEffect(cell, powerup) {
+    if (!cell.effects) {
+      cell.effects = { speedBoost: 0, enlarged: 0, enlargeMultiplier: 1, isDashing: false, dashVx: 0, dashVy: 0 };
+    }
+
+    cell.floatingText = powerup.type === 'SPEED' ? 'SPEED BOOST!' : (powerup.type === 'ENLARGE' ? 'GIANT MASS!' : 'WARP DASH!');
+    cell.floatingTextColor = powerup.color;
+    cell.floatingTextTimer = 1600;
+
+    if (powerup.type === 'SPEED') {
+      cell.effects.speedBoost = 5000; // 5 seconds
+    } else if (powerup.type === 'ENLARGE') {
+      cell.effects.enlarged = 6000; // 6 seconds
+      cell.effects.enlargeMultiplier = 2.0;
+    } else if (powerup.type === 'DASH') {
+      let hx = 0;
+      let hy = 0;
+      
+      const speed = Math.sqrt(cell.vx * cell.vx + cell.vy * cell.vy);
+      if (speed > 0.15) {
+        hx = cell.vx / speed;
+        hy = cell.vy / speed;
+      } else {
+        // If speed is zero, check player's steering keys or bot's current AI target
+        let kx = 0;
+        let ky = 0;
+        if (cell.isPlayer) {
+          if (this.keys['w'] || this.keys['arrowup']) ky -= 1;
+          if (this.keys['s'] || this.keys['arrowdown']) ky += 1;
+          if (this.keys['a'] || this.keys['arrowleft']) kx -= 1;
+          if (this.keys['d'] || this.keys['arrowright']) kx += 1;
+        } else {
+          // Bot target direction
+          const bTargetDx = cell.targetX - cell.x;
+          const bTargetDy = cell.targetY - cell.y;
+          const bTargetDist = Math.sqrt(bTargetDx * bTargetDx + bTargetDy * bTargetDy);
+          if (bTargetDist > 0.1) {
+            kx = bTargetDx / bTargetDist;
+            ky = bTargetDy / bTargetDist;
+          }
+        }
+        
+        const norm = Math.sqrt(kx * kx + ky * ky);
+        if (norm > 0.1) {
+          hx = kx / norm;
+          hy = ky / norm;
+        } else {
+          // Default to pointing random angle if completely stationary
+          const angle = Math.random() * Math.PI * 2;
+          hx = Math.cos(angle);
+          hy = Math.sin(angle);
+        }
+      }
+      
+      const dashSpeed = 26; // High constant warp velocity
+      cell.effects.isDashing = true;
+      cell.effects.dashVx = hx * dashSpeed;
+      cell.effects.dashVy = hy * dashSpeed;
+      
+      // Instantly snap actual velocity to match dash velocity
+      cell.vx = cell.effects.dashVx;
+      cell.vy = cell.effects.dashVy;
+      
+      // Spawn extra dense visual burst particles
+      this.spawnEatParticles(cell.x, cell.y, powerup.color, 24);
+    }
+  }
+
   update() {
     if (!this.player) return;
 
+    // 0. Decrement and update powerup active timers
+    const updateEffects = (cell) => {
+      if (!cell.effects) {
+        cell.effects = { speedBoost: 0, enlarged: 0, enlargeMultiplier: 1, isDashing: false, dashVx: 0, dashVy: 0 };
+      }
+      
+      if (cell.floatingTextTimer > 0) {
+        cell.floatingTextTimer -= 16;
+      }
+
+      if (cell.effects.isDashing) {
+        // Spawn glorious trailing golden sparks
+        if (Math.random() < 0.8) {
+          const angle = Math.random() * Math.PI * 2;
+          const rad = this.getRadius(cell);
+          this.particles.push({
+            x: cell.x - cell.vx * 0.8 + Math.cos(angle) * (rad * 0.3),
+            y: cell.y - cell.vy * 0.8 + Math.sin(angle) * (rad * 0.3),
+            vx: -cell.vx * 0.18 + (Math.random() - 0.5) * 3,
+            vy: -cell.vy * 0.18 + (Math.random() - 0.5) * 3,
+            radius: 2.5 + Math.random() * 4,
+            color: '#ffd700', // Gold
+            alpha: 0.95,
+            life: 0.88
+          });
+        }
+      }
+
+      if (cell.effects.speedBoost > 0) {
+        cell.effects.speedBoost -= 16;
+        // Spawn glowing trails
+        if (Math.random() < 0.35) {
+          const angle = Math.random() * Math.PI * 2;
+          const rad = this.getRadius(cell);
+          this.particles.push({
+            x: cell.x - cell.vx * 1.5 + Math.cos(angle) * (rad * 0.4),
+            y: cell.y - cell.vy * 1.5 + Math.sin(angle) * (rad * 0.4),
+            vx: -cell.vx * 0.3 + (Math.random() - 0.5) * 2,
+            vy: -cell.vy * 0.3 + (Math.random() - 0.5) * 2,
+            radius: 3 + Math.random() * 3,
+            color: '#00f2fe',
+            alpha: 0.85,
+            life: 0.9
+          });
+        }
+      }
+
+      if (cell.effects.enlarged > 0) {
+        cell.effects.enlarged -= 16;
+        cell.effects.enlargeMultiplier = 2.0;
+        // Spawn glowing sparkles
+        if (Math.random() < 0.2) {
+          const angle = Math.random() * Math.PI * 2;
+          const rad = this.getRadius(cell);
+          this.particles.push({
+            x: cell.x + Math.cos(angle) * rad,
+            y: cell.y + Math.sin(angle) * rad,
+            vx: (Math.random() - 0.5) * 1.5,
+            vy: (Math.random() - 0.5) * 1.5,
+            radius: 2 + Math.random() * 3,
+            color: '#ff007f',
+            alpha: 0.7,
+            life: 0.92
+          });
+        }
+      } else {
+        cell.effects.enlargeMultiplier = 1.0;
+      }
+    };
+
+    updateEffects(this.player);
+    for (let bot of this.bots) {
+      updateEffects(bot);
+    }
+
     // 1. Move Player based on keyboard controls
-    let ax = 0;
-    let ay = 0;
-    const accel = 0.65;
+    if (this.player.effects && this.player.effects.isDashing) {
+      // Locked straight velocity
+      this.player.vx = this.player.effects.dashVx;
+      this.player.vy = this.player.effects.dashVy;
 
-    if (this.keys['w'] || this.keys['arrowup']) ay -= accel;
-    if (this.keys['s'] || this.keys['arrowdown']) ay += accel;
-    if (this.keys['a'] || this.keys['arrowleft']) ax -= accel;
-    if (this.keys['d'] || this.keys['arrowright']) ax += accel;
+      // Check wall collision (within 8px of map boundary)
+      const rad = this.getRadius(this.player);
+      if (this.player.x - rad <= 8 || this.player.x + rad >= this.MAP_SIZE - 8 || 
+          this.player.y - rad <= 8 || this.player.y + rad >= this.MAP_SIZE - 8) {
+        this.player.effects.isDashing = false;
+        this.spawnEatParticles(this.player.x, this.player.y, '#ffd700', 24);
+      }
+    } else {
+      let ax = 0;
+      let ay = 0;
+      const accel = 0.65;
 
-    // Apply acceleration
-    this.player.vx += ax;
-    this.player.vy += ay;
+      if (this.keys['w'] || this.keys['arrowup']) ay -= accel;
+      if (this.keys['s'] || this.keys['arrowdown']) ay += accel;
+      if (this.keys['a'] || this.keys['arrowleft']) ax -= accel;
+      if (this.keys['d'] || this.keys['arrowright']) ax += accel;
 
-    // Apply drag/friction
-    this.player.vx *= 0.94;
-    this.player.vy *= 0.94;
+      // Apply acceleration
+      this.player.vx += ax;
+      this.player.vy += ay;
 
-    // Hard velocity cap based on mass
-    const maxSpeed = this.getMaxSpeed(this.player.mass);
-    const speed = Math.sqrt(this.player.vx * this.player.vx + this.player.vy * this.player.vy);
-    if (speed > maxSpeed) {
-      this.player.vx = (this.player.vx / speed) * maxSpeed;
-      this.player.vy = (this.player.vy / speed) * maxSpeed;
+      // Apply drag/friction
+      this.player.vx *= 0.94;
+      this.player.vy *= 0.94;
+
+      // Hard velocity cap based on mass and speed boost effects
+      const maxSpeed = this.getMaxSpeed(this.player);
+      const speed = Math.sqrt(this.player.vx * this.player.vx + this.player.vy * this.player.vy);
+      if (speed > maxSpeed) {
+        this.player.vx = (this.player.vx / speed) * maxSpeed;
+        this.player.vy = (this.player.vy / speed) * maxSpeed;
+      }
     }
 
     // Move player
@@ -355,7 +588,7 @@ export class GameEngine {
     this.player.y += this.player.vy;
 
     // Enforce map boundary constraints
-    const pRadius = this.getRadius(this.player.mass);
+    const pRadius = this.getRadius(this.player);
     this.player.x = Math.max(pRadius, Math.min(this.MAP_SIZE - pRadius, this.player.x));
     this.player.y = Math.max(pRadius, Math.min(this.MAP_SIZE - pRadius, this.player.y));
 
@@ -368,8 +601,8 @@ export class GameEngine {
     for (let bot of this.bots) {
       bot.aiTimer -= 16; // rough milliseconds
       
-      const bRadius = this.getRadius(bot.mass);
-      const bMaxSpeed = this.getMaxSpeed(bot.mass);
+      const bRadius = this.getRadius(bot);
+      const bMaxSpeed = this.getMaxSpeed(bot);
 
       // Simple AI state machine
       if (bot.aiTimer <= 0) {
@@ -414,23 +647,25 @@ export class GameEngine {
           bot.targetX = prey.x;
           bot.targetY = prey.y;
         } else {
-          // FORAGE! Search for closest food item
-          let closestFood = null;
-          let minFoodDist = Infinity;
+          // FORAGE! Search for closest food or powerup
+          let closestTarget = null;
+          let minTargetDist = Infinity;
           
-          for (let f of this.food) {
+          // Bots hunt for powerups too!
+          const huntTargets = [...this.food, ...this.powerups];
+          for (let f of huntTargets) {
             const dx = f.x - bot.x;
             const dy = f.y - bot.y;
-            const dist = dx*dx + dy*dy; // squared distance is faster
-            if (dist < minFoodDist) {
-              minFoodDist = dist;
-              closestFood = f;
+            const dist = dx*dx + dy*dy;
+            if (dist < minTargetDist) {
+              minTargetDist = dist;
+              closestTarget = f;
             }
           }
 
-          if (closestFood) {
-            bot.targetX = closestFood.x;
-            bot.targetY = closestFood.y;
+          if (closestTarget) {
+            bot.targetX = closestTarget.x;
+            bot.targetY = closestTarget.y;
           } else {
             // Fallback roam
             bot.targetX = Math.random() * this.MAP_SIZE;
@@ -439,26 +674,39 @@ export class GameEngine {
         }
       }
 
-      // Smooth steer toward target coordinate
-      const dx = bot.targetX - bot.x;
-      const dy = bot.targetY - bot.y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (bot.effects && bot.effects.isDashing) {
+        // Locked straight velocity for dashing bot
+        bot.vx = bot.effects.dashVx;
+        bot.vy = bot.effects.dashVy;
 
-      if (dist > 10) {
-        // Accelerate
-        bot.vx += (dx / dist) * 0.45;
-        bot.vy += (dy / dist) * 0.45;
-      }
+        // Check wall collision (within 8px of map boundary)
+        if (bot.x - bRadius <= 8 || bot.x + bRadius >= this.MAP_SIZE - 8 || 
+            bot.y - bRadius <= 8 || bot.y + bRadius >= this.MAP_SIZE - 8) {
+          bot.effects.isDashing = false;
+          this.spawnEatParticles(bot.x, bot.y, '#ffd700', 16);
+        }
+      } else {
+        // Smooth steer toward target coordinate
+        const dx = bot.targetX - bot.x;
+        const dy = bot.targetY - bot.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
 
-      // Apply drag
-      bot.vx *= 0.94;
-      bot.vy *= 0.94;
+        if (dist > 10) {
+          // Accelerate
+          bot.vx += (dx / dist) * 0.45;
+          bot.vy += (dy / dist) * 0.45;
+        }
 
-      // Cap speed
-      const botSpeed = Math.sqrt(bot.vx * bot.vx + bot.vy * bot.vy);
-      if (botSpeed > bMaxSpeed) {
-        bot.vx = (bot.vx / botSpeed) * bMaxSpeed;
-        bot.vy = (bot.vy / botSpeed) * bMaxSpeed;
+        // Apply drag
+        bot.vx *= 0.94;
+        bot.vy *= 0.94;
+
+        // Cap speed
+        const botSpeed = Math.sqrt(bot.vx * bot.vx + bot.vy * bot.vy);
+        if (botSpeed > bMaxSpeed) {
+          bot.vx = (bot.vx / botSpeed) * bMaxSpeed;
+          bot.vy = (bot.vy / botSpeed) * bMaxSpeed;
+        }
       }
 
       // Move bot
@@ -498,7 +746,7 @@ export class GameEngine {
 
       // Check bot collisions
       for (let bot of this.bots) {
-        const bRad = this.getRadius(bot.mass);
+        const bRad = this.getRadius(bot);
         dx = f.x - bot.x;
         dy = f.y - bot.y;
         dist = Math.sqrt(dx*dx + dy*dy);
@@ -514,8 +762,46 @@ export class GameEngine {
       }
     }
 
+    // 3.5 Collision Checks: Eating Powerup Dots
+    for (let i = this.powerups.length - 1; i >= 0; i--) {
+      const p = this.powerups[i];
+      p.pulse += 0.08;
+
+      // Check player collision
+      let dx = p.x - this.player.x;
+      let dy = p.y - this.player.y;
+      let dist = Math.sqrt(dx*dx + dy*dy);
+      let rad = this.getRadius(this.player);
+
+      if (dist < rad + p.radius) {
+        this.applyPowerupEffect(this.player, p);
+        this.spawnEatParticles(p.x, p.y, p.color, 18);
+        SoundEffects.playPowerup();
+
+        this.powerups.splice(i, 1);
+        this.spawnPowerup();
+        continue;
+      }
+
+      // Check bot collisions
+      for (let bot of this.bots) {
+        dx = p.x - bot.x;
+        dy = p.y - bot.y;
+        dist = Math.sqrt(dx*dx + dy*dy);
+        let bRad = this.getRadius(bot);
+        if (dist < bRad + p.radius) {
+          this.applyPowerupEffect(bot, p);
+          this.spawnEatParticles(p.x, p.y, p.color, 14);
+          SoundEffects.playPowerup();
+
+          this.powerups.splice(i, 1);
+          this.spawnPowerup();
+          break;
+        }
+      }
+    }
+
     // 4. Collision Checks: Eating Other Cells (Players & Bots)
-    // We sort cells to handle order correctly
     let allCells = [this.player, ...this.bots];
     
     for (let i = 0; i < allCells.length; i++) {
@@ -527,29 +813,38 @@ export class GameEngine {
         const cellB = allCells[j];
         if (cellB.mass === 0) continue; // Already eaten
 
-        // Check if A is larger than B
-        if (cellA.mass > cellB.mass * 1.15) {
+        // Compare effective sizes under active enlargeMultiplier multipliers
+        const sizeA = cellA.mass * (cellA.effects?.enlargeMultiplier || 1);
+        const sizeB = cellB.mass * (cellB.effects?.enlargeMultiplier || 1);
+
+        if (sizeA > sizeB) {
           const dx = cellB.x - cellA.x;
           const dy = cellB.y - cellA.y;
           const dist = Math.sqrt(dx*dx + dy*dy);
           
-          const radA = this.getRadius(cellA.mass);
-          const radB = this.getRadius(cellB.mass);
+          const radA = this.getRadius(cellA);
+          const radB = this.getRadius(cellB);
 
-          // Eat condition: overlap covers center of B
-          if (dist < radA - radB * 0.4) {
+          // Eat condition: borders touch (the bigger player eats the smaller player)
+          if (dist <= radA + radB) {
             // Eat!
             cellA.mass += cellB.mass * 0.8; // absorb 80% mass
             cellA.jiggle = 0.45;
             cellA.jiggleSpeed = 0.25;
 
+            // Cancel any active dash upon collision contact
+            if (cellA.effects) cellA.effects.isDashing = false;
+            if (cellB.effects) cellB.effects.isDashing = false;
+
             this.spawnEatParticles(cellB.x, cellB.y, cellB.color, 25);
             SoundEffects.playEatCell();
 
+            const eatenMass = cellB.mass;
             // Set mass of consumed cell to 0
             cellB.mass = 0;
 
             if (cellB.isPlayer) {
+              this.player.finalMassBeforeDeath = eatenMass;
               // GAME OVER!
               this.gameOver();
             } else {
@@ -580,7 +875,6 @@ export class GameEngine {
     this.camera.y += (this.player.y - this.camera.y) * 0.1;
 
     // Camera dynamic scale zoom:
-    // As player grows, zoom out
     const targetZoom = Math.max(0.2, Math.min(1.2, Math.pow(this.INITIAL_MASS / this.player.mass, 0.23)));
     this.camera.zoom += (targetZoom - this.camera.zoom) * 0.05;
 
@@ -594,7 +888,27 @@ export class GameEngine {
   gameOver() {
     this.stop();
     if (this.onGameOver) {
-      this.onGameOver(Math.round(this.player.mass));
+      const playerFinalMass = this.player.finalMassBeforeDeath || this.INITIAL_MASS;
+      
+      // Build a leaderboard including the player and all bots
+      const leaderboard = [
+        { 
+          name: this.player.name, 
+          mass: playerFinalMass, 
+          avatarUrl: this.player.avatarUrl, 
+          isPlayer: true 
+        },
+        ...this.bots.map(b => ({ 
+          name: b.name, 
+          mass: b.mass, 
+          avatarUrl: b.avatarUrl, 
+          isPlayer: false 
+        }))
+      ].sort((a, b) => b.mass - a.mass);
+      
+      const rank = leaderboard.findIndex(x => x.isPlayer) + 1;
+      
+      this.onGameOver(Math.round(playerFinalMass), leaderboard, rank);
     }
   }
 
@@ -663,6 +977,49 @@ export class GameEngine {
       ctx.fill();
     }
 
+    // 2.5 Draw Power-up dots
+    for (let p of this.powerups) {
+      const dx = p.x - this.camera.x;
+      const dy = p.y - this.camera.y;
+      if (Math.abs(dx) > w / 2 / this.camera.zoom + 40 || Math.abs(dy) > h / 2 / this.camera.zoom + 40) {
+        continue;
+      }
+      
+      const scale = 1 + Math.sin(p.pulse) * 0.12;
+      
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      
+      // Pulsing outer glowing ring
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.radius * scale, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Glowing halo
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = 0.15;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.radius * scale + 8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Solid central core
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.radius * 0.65, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Centered letter label
+      ctx.fillStyle = '#ffffff';
+      ctx.font = "bold 13px 'Outfit', sans-serif";
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(p.type[0], 0, 0);
+
+      ctx.restore();
+    }
+
     // 3. Draw Particles
     for (let p of this.particles) {
       ctx.save();
@@ -681,7 +1038,7 @@ export class GameEngine {
     for (let cell of renderCells) {
       if (cell.mass <= 0) continue;
 
-      const radius = this.getRadius(cell.mass);
+      const radius = this.getRadius(cell);
 
       // Frustum culling for large cell circles
       const dx = cell.x - this.camera.x;
@@ -741,6 +1098,39 @@ export class GameEngine {
       // White overlay text
       ctx.fillStyle = cell.isPlayer ? '#39ff14' : '#ffffff';
       ctx.fillText(cell.name, cell.x, cell.y + radius + 22);
+
+      // Render floating size score above the cell
+      const scoreStr = Math.round(cell.mass).toString();
+      ctx.font = `800 ${Math.max(13, Math.round(12 + radius * 0.07))}px 'Outfit', sans-serif`;
+      
+      // Black boundary shadow
+      ctx.strokeText(scoreStr, cell.x, cell.y - radius - 18);
+      
+      // Glowing text color (cyan for player, magenta for bots)
+      ctx.fillStyle = cell.isPlayer ? '#00f2fe' : '#ff007f';
+      ctx.fillText(scoreStr, cell.x, cell.y - radius - 18);
+
+      // Render floating active powerup label above the cell if active
+      if (cell.floatingTextTimer > 0) {
+        const textY = cell.y - radius - 42 - (1 - cell.floatingTextTimer / 1600) * 35;
+        const alpha = Math.min(1.0, cell.floatingTextTimer / 300);
+        
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = `bold ${Math.max(13, Math.round(11 + radius * 0.085))}px 'Outfit', sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Black contour
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 4.5;
+        ctx.strokeText(cell.floatingText, cell.x, textY);
+
+        // Neon coloring
+        ctx.fillStyle = cell.floatingTextColor;
+        ctx.fillText(cell.floatingText, cell.x, textY);
+        ctx.restore();
+      }
     }
 
     ctx.restore();
