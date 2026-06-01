@@ -1,6 +1,8 @@
+import { io } from 'socket.io-client';
 import { CameraManager } from './camera.js';
 import { AvatarGenerator } from './avatarGenerator.js';
 import { GameEngine } from './game.js';
+import { ENABLE_MULTIPLAYER } from './config.js';
 
 // Application State
 const appState = {
@@ -13,7 +15,14 @@ const appState = {
     maxMass: 0,
     botsEaten: 0
   },
-  hasEnteredArena: false
+  hasEnteredArena: false,
+
+  // Multiplayer room states
+  roomMode: 'public', // 'public' or 'custom'
+  targetRoomCode: '',
+  currentRoomCode: '',
+  privateRoom: false,
+  publicRooms: []
 };
 
 // UI Elements
@@ -38,6 +47,17 @@ const DOM = {
   playCachedBtn: document.getElementById('play-cached-btn'),
   scannerSkipAiBtn: document.getElementById('scanner-skip-ai-btn'),
   
+  // Room Selectors
+  quickPlayBtn: document.getElementById('quick-play-btn'),
+  customLobbyBtn: document.getElementById('custom-lobby-btn'),
+  customLobbySettings: document.getElementById('custom-lobby-settings'),
+  roomCodeInput: document.getElementById('room-code-input'),
+  joinCodeBtn: document.getElementById('join-code-btn'),
+  privateRoomCheckbox: document.getElementById('private-room-checkbox'),
+  lobbyRoomInfo: document.getElementById('lobby-room-info'),
+  lobbyRoomDisplay: document.getElementById('lobby-room-display'),
+  copyLinkBtn: document.getElementById('copy-link-btn'),
+
   // Input fields
   playerNameInput: document.getElementById('player-name'),
   apiKeyInput: document.getElementById('gemini-api-key'),
@@ -61,6 +81,44 @@ const DOM = {
   gameoverStatEaten: document.getElementById('gameover-stat-eaten'),
   gameoverAvatarCanvas: document.getElementById('gameover-avatar-canvas')
 };
+
+// Connect to game WebSocket server (detect host dynamic port mappings)
+let socket = null;
+if (ENABLE_MULTIPLAYER) {
+  const socketUrl = window.location.hostname === 'localhost' ? 'http://localhost:3001' : window.location.origin;
+  socket = io(socketUrl);
+
+  // Socket Event Handlers
+  socket.on('connect', () => {
+    console.log('Connected to game WebSocket server:', socket.id);
+  });
+
+  socket.on('public_rooms_list', (list) => {
+    appState.publicRooms = list;
+  });
+
+  socket.on('join_error', (data) => {
+    showToast(data.message, true);
+    appState.hasEnteredArena = false;
+    showScreen(DOM.welcomeScreen);
+    DOM.settingsBtn.classList.remove('hidden');
+  });
+
+  socket.on('join_success', (data) => {
+    appState.currentRoomCode = data.code;
+    appState.hasEnteredArena = true;
+    
+    // Display Share invite link indicators
+    DOM.lobbyRoomDisplay.textContent = data.code;
+    DOM.lobbyRoomInfo.classList.remove('hidden');
+    
+    // Swap viewport screen state
+    showScreen(DOM.gameHud);
+    
+    // Start 2D Canvas Engine synchronously
+    game.start(data.code, data.playerId, data.food, data.powerups, socket);
+  });
+}
 
 // Initialize Camera Manager
 const camera = new CameraManager('camera-stream');
@@ -175,6 +233,61 @@ function initApp() {
     DOM.settingsModal.classList.remove('active');
   });
 
+  // Hide room manager UI if multiplayer is disabled
+  if (!ENABLE_MULTIPLAYER) {
+    const roomSetup = document.getElementById('room-setup-container');
+    if (roomSetup) roomSetup.style.display = 'none';
+    const lobbyRoomInfo = document.getElementById('lobby-room-info');
+    if (lobbyRoomInfo) lobbyRoomInfo.style.display = 'none';
+  } else {
+    // Multiplayer room selection toggles
+    DOM.quickPlayBtn.addEventListener('click', () => {
+      appState.roomMode = 'public';
+      DOM.quickPlayBtn.classList.add('active');
+      DOM.customLobbyBtn.classList.remove('active');
+      DOM.customLobbySettings.classList.add('hidden');
+    });
+
+    DOM.customLobbyBtn.addEventListener('click', () => {
+      appState.roomMode = 'custom';
+      DOM.customLobbyBtn.classList.add('active');
+      DOM.quickPlayBtn.classList.remove('active');
+      DOM.customLobbySettings.classList.remove('hidden');
+    });
+
+    // Custom Join button click triggers immediate connection
+    DOM.joinCodeBtn.addEventListener('click', () => {
+      const code = DOM.roomCodeInput.value.trim().toUpperCase();
+      if (code.length === 4) {
+        appState.roomMode = 'custom';
+        appState.targetRoomCode = code;
+        showToast(`Custom room code locked: ${code}. Take your selfie!`);
+      } else {
+        showToast('Please enter a valid 4-letter code!', true);
+      }
+    });
+
+    // Clipboard Copier shareable link triggers
+    DOM.copyLinkBtn.addEventListener('click', () => {
+      if (!appState.currentRoomCode) return;
+      const inviteUrl = `${window.location.origin}/?room=${appState.currentRoomCode}`;
+      navigator.clipboard.writeText(inviteUrl).then(() => {
+        DOM.copyLinkBtn.textContent = 'Copied!';
+        DOM.copyLinkBtn.style.borderColor = 'var(--neon-green)';
+        DOM.copyLinkBtn.style.color = 'var(--neon-green)';
+        showToast('Invite link copied to clipboard!');
+        
+        setTimeout(() => {
+          DOM.copyLinkBtn.textContent = 'Copy Link';
+          DOM.copyLinkBtn.style.borderColor = 'rgba(0, 242, 254, 0.35)';
+          DOM.copyLinkBtn.style.color = '';
+        }, 2500);
+      }).catch(err => {
+        showToast('Copy failed, please highlight manually!', true);
+      });
+    });
+  }
+
   // Welcome Screen -> Create Avatar trigger
   DOM.startCaptureBtn.addEventListener('click', async () => {
     appState.playerName = DOM.playerNameInput.value.trim() || 'Blobby';
@@ -221,9 +334,13 @@ function initApp() {
 
   // Scanner Stage: Enter Arena
   DOM.scannerNextBtn.addEventListener('click', () => {
-    appState.hasEnteredArena = true;
-    showScreen(DOM.gameHud);
-    game.start(appState.playerName, appState.avatarUrl);
+    if (ENABLE_MULTIPLAYER) {
+      initiateMultiplayerConnection();
+    } else {
+      appState.hasEnteredArena = true;
+      showScreen(DOM.gameHud);
+      game.start(appState.playerName, appState.avatarUrl);
+    }
   });
 
   // Skip AI generation during pipeline scan
@@ -236,15 +353,20 @@ function initApp() {
     appState.playerName = DOM.playerNameInput.value.trim() || 'Blobby';
     localStorage.setItem('facemoji_playerName', appState.playerName);
     appState.avatarUrl = localStorage.getItem('facemoji_cachedAvatar');
-    appState.hasEnteredArena = true;
     
-    DOM.settingsBtn.classList.add('hidden');
-    showScreen(DOM.gameHud);
-    game.start(appState.playerName, appState.avatarUrl);
+    if (ENABLE_MULTIPLAYER) {
+      initiateMultiplayerConnection();
+    } else {
+      appState.hasEnteredArena = true;
+      DOM.settingsBtn.classList.add('hidden');
+      showScreen(DOM.gameHud);
+      game.start(appState.playerName, appState.avatarUrl);
+    }
   });
 
   // Game over retry
   DOM.gameoverRetryBtn.addEventListener('click', () => {
+    confetti.stop(); // Stop any active confetti showers!
     DOM.settingsBtn.classList.remove('hidden');
     appState.hasEnteredArena = false; // Reset
     showScreen(DOM.welcomeScreen);
@@ -259,6 +381,27 @@ function initApp() {
 
   // Initial render of all-time champions
   renderLobbyLeaderboard();
+
+  if (ENABLE_MULTIPLAYER) {
+    // Check URL parameters for active invite room code
+    const urlParams = new URLSearchParams(window.location.search);
+    const inviteCode = urlParams.get('room');
+    if (inviteCode) {
+      const cleanInvite = inviteCode.trim().toUpperCase();
+      if (cleanInvite.length === 4) {
+        appState.roomMode = 'custom';
+        appState.targetRoomCode = cleanInvite;
+        DOM.roomCodeInput.value = cleanInvite;
+        
+        // Select Custom Arena visual tabs
+        DOM.customLobbyBtn.classList.add('active');
+        DOM.quickPlayBtn.classList.remove('active');
+        DOM.customLobbySettings.classList.remove('hidden');
+        
+        showToast(`Custom invite room code locked: ${cleanInvite}!`);
+      }
+    }
+  }
 }
 
 function checkAndDisplayCachedAvatar() {
@@ -272,16 +415,74 @@ function checkAndDisplayCachedAvatar() {
 }
 
 function launchWithDefaultBlob() {
-  if (appState.hasEnteredArena) return; // Prevent double trigger
-  appState.hasEnteredArena = true;
+  if (appState.hasEnteredArena) return;
   camera.stop();
   appState.avatarUrl = appState.capturedPhoto || AvatarGenerator.generateProcedural(null);
-  showScreen(DOM.gameHud);
-  game.start(appState.playerName, appState.avatarUrl);
+  
+  if (ENABLE_MULTIPLAYER) {
+    initiateMultiplayerConnection();
+  } else {
+    appState.hasEnteredArena = true;
+    showScreen(DOM.gameHud);
+    game.start(appState.playerName, appState.avatarUrl);
+  }
 }
 
 function handleCameraFailure() {
   launchWithDefaultBlob();
+}
+
+function initiateMultiplayerConnection() {
+  if (appState.hasEnteredArena) return; // Prevent double trigger
+  camera.stop();
+
+  appState.playerName = DOM.playerNameInput.value.trim() || 'Blobby';
+  localStorage.setItem('facemoji_playerName', appState.playerName);
+
+  if (!appState.avatarUrl) {
+    appState.avatarUrl = appState.capturedPhoto || AvatarGenerator.generateProcedural(null);
+  }
+
+  DOM.settingsBtn.classList.add('hidden');
+
+  // 1. PUBLIC MATCHMAKING MODE
+  if (appState.roomMode === 'public') {
+    const availableRoom = appState.publicRooms.find(r => r.playerCount < r.maxPlayers);
+    if (availableRoom) {
+      showToast(`Joining Active Public Arena: ${availableRoom.code}...`);
+      socket.emit('join_room', { 
+        code: availableRoom.code, 
+        playerName: appState.playerName, 
+        avatarUrl: appState.avatarUrl 
+      });
+    } else {
+      showToast('Launching new Arena lobby...');
+      socket.emit('create_room', { 
+        playerName: appState.playerName, 
+        avatarUrl: appState.avatarUrl, 
+        isPublic: true 
+      });
+    }
+  } 
+  // 2. CUSTOM OR PRIVATE ROOM MODE
+  else {
+    const code = DOM.roomCodeInput.value.trim().toUpperCase();
+    if (code) {
+      showToast(`Connecting to Arena ${code}...`);
+      socket.emit('join_room', { 
+        code: code, 
+        playerName: appState.playerName, 
+        avatarUrl: appState.avatarUrl 
+      });
+    } else {
+      showToast('Hosting new Custom Arena...');
+      socket.emit('create_room', { 
+        playerName: appState.playerName, 
+        avatarUrl: appState.avatarUrl, 
+        isPublic: !DOM.privateRoomCheckbox.checked 
+      });
+    }
+  }
 }
 
 // AI Emoji Pipeline Simulation
@@ -307,17 +508,15 @@ async function startAvatarAIPipeline() {
 
   let progress = 0;
   const progressInterval = setInterval(() => {
-    // Fill up to 75% rapidly, then let the image generator promise finish the final 25%
     if (progress < 75) {
       progress += Math.floor(Math.random() * 8) + 2;
       DOM.scannerProgress.style.width = `${Math.min(75, progress)}%`;
     }
   }, 120);
 
-  // Background promise generation so it continues even if skipped!
+  // Background promise generation
   const generateAvatarPromise = (async () => {
     if (appState.useApi) {
-      // Gemini Flash-Image multimodal single API request
       return await AvatarGenerator.generateWithGemini(
         appState.capturedPhoto || AvatarGenerator.generateProcedural(null),
         appState.apiKey,
@@ -328,7 +527,6 @@ async function startAvatarAIPipeline() {
         }
       );
     } else {
-      // Procedural Vector Generation
       if (!appState.hasEnteredArena) writeConsole('COMPILING LOCAL STYLIZER ENGINE...');
       await sleep(300);
       if (!appState.hasEnteredArena) writeConsole('RUNNING PIXEL MATRIX HISTOGRAM ANALYSIS...');
@@ -346,11 +544,9 @@ async function startAvatarAIPipeline() {
   })();
 
   generateAvatarPromise.then(async (avatarDataUrl) => {
-    // 1. ALWAYS CACHE SUCCESSFULLY GENERATED AVATARS (even if skipped!)
     localStorage.setItem('facemoji_cachedAvatar', avatarDataUrl);
     appState.avatarUrl = avatarDataUrl;
     
-    // 2. If the player HAS NOT entered the arena yet, complete visual and reveal the Next button!
     if (!appState.hasEnteredArena) {
       clearInterval(progressInterval);
       DOM.scannerProgress.style.width = '100%';
@@ -374,7 +570,6 @@ async function startAvatarAIPipeline() {
       await sleep(1000);
       
       const fallbackUrl = appState.capturedPhoto || AvatarGenerator.generateProcedural(null);
-      // Cache fallback avatar too
       localStorage.setItem('facemoji_cachedAvatar', fallbackUrl);
       appState.avatarUrl = fallbackUrl;
       
@@ -399,8 +594,25 @@ function handleStatsUpdate(mass, eatenCount) {
 }
 
 function handleGameOver(finalMass, leaderboard, rank) {
-  // Save to persistent global leaderboard (real players differed by user name)
-  saveScoreToGlobalLeaderboard(appState.playerName, finalMass, appState.avatarUrl);
+  const globalRank = saveScoreToGlobalLeaderboard(appState.playerName, finalMass, appState.avatarUrl);
+
+  // Trigger Victory confetti on podium finish
+  const gameoverTitle = document.querySelector('.gameover-title');
+  if (globalRank >= 1 && globalRank <= 3) {
+    confetti.start();
+    if (gameoverTitle) {
+      gameoverTitle.innerHTML = `🏆 PODIUM FINISH #${globalRank} 🏆`;
+      gameoverTitle.style.background = 'linear-gradient(135deg, #ffd700 0%, #ff007f 100%)';
+      gameoverTitle.style.webkitBackgroundClip = 'text';
+    }
+  } else {
+    confetti.stop();
+    if (gameoverTitle) {
+      gameoverTitle.innerHTML = 'DEFEATED';
+      gameoverTitle.style.background = 'linear-gradient(135deg, var(--neon-magenta) 0%, var(--neon-purple) 100%)';
+      gameoverTitle.style.webkitBackgroundClip = 'text';
+    }
+  }
 
   // Update Game Over text
   DOM.gameoverStatMass.textContent = finalMass;
@@ -450,7 +662,7 @@ function handleGameOver(finalMass, leaderboard, rank) {
         <li class="gameover-leaderboard-item ${selfClass}">
           <div class="gameover-rank ${rankClass}">#${rankNum}</div>
           <div class="gameover-name">
-            <img class="gameover-avatar-mini" src="${cell.avatarUrl}" alt="${cell.name}">
+            <img class="gameover-avatar-mini" src="${cell.avatarUrl || AvatarGenerator.generateProcedural(null)}" alt="${cell.name}">
             <span>${cell.name}</span>
           </div>
           <div class="gameover-score">${Math.round(cell.mass)}</div>
@@ -459,10 +671,8 @@ function handleGameOver(finalMass, leaderboard, rank) {
     });
     
     if (!isPlayerInTop5) {
-      // Append separator ellipses
       listHtml += `<div class="gameover-leaderboard-separator">•••</div>`;
       
-      // Find player cell in the full leaderboard
       const playerIndex = leaderboard.findIndex(cell => cell.isPlayer);
       if (playerIndex !== -1) {
         const pCell = leaderboard[playerIndex];
@@ -470,7 +680,7 @@ function handleGameOver(finalMass, leaderboard, rank) {
           <li class="gameover-leaderboard-item self">
             <div class="gameover-rank">#${playerIndex + 1}</div>
             <div class="gameover-name">
-              <img class="gameover-avatar-mini" src="${pCell.avatarUrl}" alt="${pCell.name}">
+              <img class="gameover-avatar-mini" src="${pCell.avatarUrl || AvatarGenerator.generateProcedural(null)}" alt="${pCell.name}">
               <span>${pCell.name}</span>
             </div>
             <div class="gameover-score">${Math.round(pCell.mass)}</div>
@@ -487,7 +697,7 @@ function handleGameOver(finalMass, leaderboard, rank) {
 
 function saveScoreToGlobalLeaderboard(playerName, finalMass, avatarUrl) {
   const name = (playerName || 'Blobby').trim();
-  if (!name) return;
+  if (!name) return -1;
   
   let scores = [];
   try {
@@ -497,18 +707,16 @@ function saveScoreToGlobalLeaderboard(playerName, finalMass, avatarUrl) {
     console.error('Failed to parse global leaderboard', e);
   }
   
-  // Find if this player already exists in the leaderboard (case-insensitive check)
+  // Find if this player already exists in the leaderboard
   const existingIndex = scores.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
   
   if (existingIndex !== -1) {
-    // If the new score is higher, update it (differ by user name to keep high score)
     if (finalMass > scores[existingIndex].mass) {
       scores[existingIndex].mass = finalMass;
       scores[existingIndex].avatarUrl = avatarUrl;
       scores[existingIndex].timestamp = Date.now();
     }
   } else {
-    // Add new player record
     scores.push({
       name: name,
       mass: finalMass,
@@ -522,6 +730,9 @@ function saveScoreToGlobalLeaderboard(playerName, finalMass, avatarUrl) {
   scores = scores.slice(0, 8);
   
   localStorage.setItem('facemoji_global_leaderboard', JSON.stringify(scores));
+
+  const playerRank = scores.findIndex(x => x.name.toLowerCase() === name.toLowerCase()) + 1;
+  return playerRank;
 }
 
 function renderLobbyLeaderboard() {
@@ -541,7 +752,6 @@ function renderLobbyLeaderboard() {
     return;
   }
   
-  // Highlight currently typed nickname dynamically if it matches
   const currentTypedName = DOM.playerNameInput.value.trim().toLowerCase();
   
   let html = '';
@@ -564,6 +774,118 @@ function renderLobbyLeaderboard() {
   
   listEl.innerHTML = html;
 }
+
+/**
+ * Fullscreen Confetti Particle System Manager
+ */
+class ConfettiManager {
+  constructor(canvasId) {
+    this.canvas = document.getElementById(canvasId);
+    if (!this.canvas) return;
+    this.ctx = this.canvas.getContext('2d');
+    this.particles = [];
+    this.active = false;
+    this.animationFrameId = null;
+    
+    window.addEventListener('resize', () => {
+      if (this.active) {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+      }
+    });
+  }
+  
+  start() {
+    if (!this.canvas) return;
+    this.active = true;
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+    this.particles = [];
+    
+    const colors = ['#ffd700', '#00f2fe', '#ff007f', '#39ff14', '#9c88ff', '#ff9f43', '#1dd1a1'];
+    
+    for (let i = 0; i < 150; i++) {
+      const fromLeft = Math.random() < 0.5;
+      
+      this.particles.push({
+        x: fromLeft ? -10 : this.canvas.width + 10,
+        y: Math.random() * (this.canvas.height * 0.4) + this.canvas.height * 0.15,
+        vx: (fromLeft ? 1 : -1) * (11 + Math.random() * 16),
+        vy: - (13 + Math.random() * 11),
+        size: 7 + Math.random() * 7,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        rotation: Math.random() * Math.PI * 2,
+        rotationSpeed: (Math.random() - 0.5) * 0.22,
+        wobble: Math.random() * Math.PI * 2,
+        wobbleSpeed: 0.05 + Math.random() * 0.12,
+        drag: 0.94 + Math.random() * 0.03,
+        gravity: 0.35 + Math.random() * 0.25
+      });
+    }
+    
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+    }
+    this.loop();
+    
+    setTimeout(() => {
+      this.stop();
+    }, 7000);
+  }
+  
+  stop() {
+    this.active = false;
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    if (this.ctx) {
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+  }
+  
+  loop() {
+    if (!this.active) return;
+    
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    
+    ctx.clearRect(0, 0, w, h);
+    
+    let particlesAlive = false;
+    
+    for (let p of this.particles) {
+      p.vx *= p.drag;
+      p.vy += p.gravity;
+      p.vy *= p.drag;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.rotation += p.rotationSpeed;
+      p.wobble += p.wobbleSpeed;
+      
+      if (p.y < h + 20 && p.x > -30 && p.x < w + 30) {
+        particlesAlive = true;
+        
+        ctx.save();
+        ctx.translate(p.x + Math.sin(p.wobble) * 9, p.y);
+        ctx.rotate(p.rotation);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+        ctx.restore();
+      }
+    }
+    
+    if (particlesAlive) {
+      this.animationFrameId = requestAnimationFrame(() => this.loop());
+    } else {
+      this.stop();
+    }
+  }
+}
+
+// Instantiate Confetti overlay instance
+const confetti = new ConfettiManager('confetti-canvas');
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));

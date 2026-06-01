@@ -864,6 +864,25 @@ input:checked + .slider:before {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Custom scrollbar for gameover leaderboard */
+.gameover-leaderboard-list::-webkit-scrollbar {
+  width: 6px;
+}
+.gameover-leaderboard-list::-webkit-scrollbar-track {
+  background: rgba(10, 15, 30, 0.3);
+  border-radius: 4px;
+}
+.gameover-leaderboard-list::-webkit-scrollbar-thumb {
+  background: rgba(0, 242, 254, 0.2);
+  border-radius: 4px;
+}
+.gameover-leaderboard-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 242, 254, 0.4);
 }
 
 .gameover-leaderboard-item {
@@ -1108,6 +1127,21 @@ input:checked + .slider:before {
   border: 1px dashed rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   width: 100%;
+}
+
+/* Active Room Selection Toggle Buttons */
+.btn-secondary.active {
+  background: rgba(0, 242, 254, 0.15) !important;
+  border-color: var(--neon-cyan) !important;
+  box-shadow: 0 0 15px rgba(0, 242, 254, 0.35) !important;
+  color: var(--neon-cyan) !important;
+  font-weight: 700 !important;
+}
+
+/* Custom slider ball sliding transitions */
+input:checked + .slider .slider-ball {
+  transform: translateX(20px);
+  background-color: var(--bg-dark) !important;
 }
 
 /* Fullscreen Canvas */

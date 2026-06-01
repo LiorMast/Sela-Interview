@@ -39,6 +39,47 @@
           <input type="text" id="player-name" class="text-input" placeholder="Enter blob name..." maxlength="14" autocomplete="off">
         </div>
 
+        <!-- Room Configuration Panel -->
+        <div id="room-setup-container" class="input-group" style="margin-bottom: 20px;">
+          <label class="input-label">Arena Room Setup</label>
+          <div style="display: flex; gap: 10px; margin-top: 4px;">
+            <button id="quick-play-btn" class="btn-secondary active" style="flex: 1; padding: 10px; font-size: 0.8rem; border-radius: 10px;">Public Arena</button>
+            <button id="custom-lobby-btn" class="btn-secondary" style="flex: 1; padding: 10px; font-size: 0.8rem; border-radius: 10px;">Custom Arena</button>
+          </div>
+        </div>
+
+        <!-- Custom Lobby Settings Panel (Hidden by default) -->
+        <div id="custom-lobby-settings" class="input-group hidden" style="margin-bottom: 20px; background: rgba(10, 15, 30, 0.4); padding: 14px; border-radius: 14px; border: 1.5px solid rgba(0, 242, 254, 0.1);">
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <div>
+              <label for="room-code-input" class="input-label" style="font-size: 0.72rem;">Join with Code</label>
+              <div style="display: flex; gap: 8px; margin-top: 4px;">
+                <input type="text" id="room-code-input" class="text-input" placeholder="CODE..." maxlength="4" style="padding: 8px 12px; font-size: 0.95rem; text-transform: uppercase; text-align: center; font-weight: bold; flex: 1; height: 38px; border-radius: 8px;" autocomplete="off">
+                <button id="join-code-btn" class="btn-primary" style="padding: 0 16px; font-size: 0.8rem; margin-top: 0; box-shadow: none; height: 38px; border-radius: 8px;">Join</button>
+              </div>
+            </div>
+            
+            <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px;">
+              <span style="font-size: 0.78rem; font-weight: 600; color: var(--text-secondary);">Private Room</span>
+              <label class="switch" style="width: 42px; height: 22px;">
+                <input type="checkbox" id="private-room-checkbox">
+                <span class="slider" style="border-radius: 22px;"><span style="position: absolute; content: ''; height: 16px; width: 16px; left: 2px; bottom: 2px; background: #fff; border-radius: 50%; transition: .4s;" class="slider-ball"></span></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Joined Room Indicator Panel -->
+        <div id="lobby-room-info" class="input-group hidden" style="margin-bottom: 20px; background: rgba(0, 242, 254, 0.05); padding: 12px 14px; border-radius: 14px; border: 1.5px solid rgba(0, 242, 254, 0.25);">
+          <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <div style="display: flex; flex-direction: column; text-align: left;">
+              <span style="font-size: 0.68rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Active Arena</span>
+              <span id="lobby-room-display" style="font-family: var(--font-title); font-weight: 800; font-size: 1.25rem; color: var(--neon-cyan); letter-spacing: 1px; line-height: 1.2;">----</span>
+            </div>
+            <button id="copy-link-btn" class="btn-secondary" style="padding: 6px 14px; font-size: 0.75rem; border-color: rgba(0, 242, 254, 0.35); border-radius: 8px;">Copy Link</button>
+          </div>
+        </div>
+
         <!-- Cached Avatar Preview (Hidden by default unless cache exists) -->
         <div id="cached-avatar-container" class="input-group hidden" style="align-items: center; margin-bottom: 20px;">
           <label class="input-label">Last Saved Avatar</label>
@@ -240,6 +281,13 @@
         </div>
       </div>
 
+      <button id="gameover-retry-btn" class="btn-primary" style="margin-bottom: 22px;">
+        <span>Re-enter Arena</span>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+        </svg>
+      </button>
+
       <!-- Final Arena Standings Leaderboard -->
       <div class="gameover-leaderboard-container">
         <h3 class="gameover-leaderboard-title">
@@ -250,15 +298,11 @@
           <!-- Populated dynamically -->
         </ol>
       </div>
-
-      <button id="gameover-retry-btn" class="btn-primary">
-        <span>Re-enter Arena</span>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
-        </svg>
-      </button>
     </div>
   </div>
+
+  <!-- Fullscreen Confetti overlay canvas -->
+  <canvas id="confetti-canvas" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999; pointer-events: none;"></canvas>
 
   <!-- Entry Script Orchestrator -->
   <script type="module" src="/src/main.js"></script>
